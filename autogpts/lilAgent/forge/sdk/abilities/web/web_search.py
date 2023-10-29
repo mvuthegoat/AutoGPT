@@ -37,7 +37,7 @@ async def web_search(agent, task_id: str, query: str) -> str:
     """
     search_results = []
     attempts = 0
-    num_results = 8
+    num_results = 1
 
     while attempts < DUCKDUCKGO_MAX_ATTEMPTS:
         if not query:

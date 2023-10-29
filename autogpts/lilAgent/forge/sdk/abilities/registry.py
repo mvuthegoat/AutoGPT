@@ -54,6 +54,7 @@ class Ability(pydantic.BaseModel):
         Returns:
             Any: The result of the method call.
         """
+        print(f"args: {args} and kwds: {kwds}")
         return self.method(*args, **kwds)
 
     def __str__(self) -> str:
@@ -189,5 +190,6 @@ if __name__ == "__main__":
 
     sys.path.append("/Users/swifty/dev/forge/forge")
     register = AbilityRegister(agent=None)
+    print(f"LIST: {register.list_abilities().keys()}")
     print(register.abilities_description())
     print(register.run_ability("abc", "list_files", "/Users/swifty/dev/forge/forge"))

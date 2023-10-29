@@ -55,6 +55,8 @@ class LocalWorkspace(Workspace):
 
     def write(self, task_id: str, path: str, data: bytes) -> None:
         file_path = self._resolve_path(task_id, path)
+
+        print(f"FILE_PATH: {file_path}")
         with open(file_path, "wb") as f:
             f.write(data)
 
@@ -76,8 +78,10 @@ class LocalWorkspace(Workspace):
         return self._resolve_path(task_id, path).exists()
 
     def list(self, task_id: str, path: str) -> typing.List[str]:
-        path = self.base_path / task_id / path
+        #path = self.base_path / task_id / path
+        print(f"PATH???? {path}")
         base = self._resolve_path(task_id, path)
+        print(f"BASE???? {base}")
         if not base.exists() or not base.is_dir():
             return []
         return [str(p.relative_to(self.base_path / task_id)) for p in base.iterdir()]

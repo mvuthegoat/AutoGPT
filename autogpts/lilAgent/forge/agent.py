@@ -14,6 +14,8 @@ from forge.sdk import (
 import json	
 import pprint
 
+import os
+
 LOG = ForgeLogger(__name__)
 
 
@@ -122,26 +124,155 @@ class ForgeAgent(Agent):
         multiple steps. Returning a request to continue in the step output, the user can then decide
         if they want the agent to continue or not.
         """
+
+        task = await self.db.get_task(task_id)
+
         # An example that
         step = await self.db.create_step(
             task_id=task_id, input=step_request, is_last=True
         )
+        
 
-        self.workspace.write(task_id=task_id, path="output.txt", data=b"Washington D.C")
+        # Set up working dir and store files
+        self.wd = os.path.join(str(self.workspace.base_path), task.task_id)
+        LOG.info(f"💽 Set working directory: {self.wd}")
+        if not os.path.exists(self.wd):
+            os.makedirs(self.wd)
+        os.chdir(self.wd)
 
-        await self.db.create_artifact(
-            task_id=task_id,
-            step_id=step.step_id,
-            file_name="output.txt",
-            relative_path="",
-            agent_created=True,
-        )
+        self.files = {f:os.path.getmtime(os.path.join(self.wd, f)) for f in os.listdir(self.wd) if os.path.isfile(os.path.join(self.wd, f))}
+        
+        if self.files.keys():
+            LOG.info("📂 Current files")
+            LOG.info(str(self.files.keys()))
 
-        step.output = "Washington D.C"
 
-        LOG.info(f"\t✅ Final Step completed: {step.step_id}. \n" +
-                 f"Output should be placeholder text Washington D.C. You'll need to \n" +
-                 f"modify execute_step to include LLM behavior. Follow the tutorial " +
-                 f"if confused. ")
+        LOG.info(f"Step_request: {step_request}")
+        # Log the message
+        #LOG.info(f"\t✅ Final Step completed: {step.step_id} input: {step.input[:19]}")
+        
+        # Initialize the PromptEngine with the "gpt-3.5-turbo" model
+        prompt_engine = PromptEngine("gpt-3.5-turbo")
+        # Load the system and task prompts
+        system_prompt = prompt_engine.load_prompt("system-format")
 
+        LOG.info(f"SYS_PROMPT: {system_prompt}")
+
+        # Initialize the messages list with the system prompt
+        messages = [
+            {"role": "system", "content": system_prompt},
+        ]
+        # Define the task parameters
+        task_kwargs = {
+            "task": task.input,
+            "abilities": self.abilities.list_abilities_for_prompt(),
+        }
+
+        # Load the task prompt with the defined task parameters
+        task_prompt = prompt_engine.load_prompt("task-step", **task_kwargs)
+
+        #LOG.info(f"TASK_PROMPT: {task_prompt}")
+
+        # Append the task prompt to the messages list
+        messages.append({"role": "user", "content": task_prompt})
+
+        count = 0
+        
+        while True:
+            if count >= 10: 
+                break
+            count += 1
+
+            success = False
+            MAX_ATTEMPTS  = 3
+
+            for attempt in range(MAX_ATTEMPTS):
+                try:
+                    LOG.info(f"TASK_PROMPT: {messages[-1]['content']}")
+                    # Define the parameters for the chat completion request
+                    chat_completion_kwargs = {
+                        "messages": messages,
+                        "model": "gpt-4",
+                    }
+                    # Make the chat completion request and parse the response
+                    chat_response = await chat_completion_request(**chat_completion_kwargs)
+                    answer = json.loads(chat_response["choices"][0]["message"]["content"])
+
+                    # Log the answer for debugging purposes
+                    LOG.info(pprint.pformat(answer))
+                    success = True
+                    break
+
+                except json.JSONDecodeError as e:
+                    # Handle JSON decoding errors
+                    LOG.error(f"Unable to decode chat response: {chat_response}")
+                except Exception as e:
+                    # Handle other exceptions
+                    LOG.error(f"Unable to generate chat response: {e}")
+
+            if not success:
+                LOG.error(f"Model can't generate good responses")
+                break
+
+            # Extract the ability from the answer
+            ability = answer["ability"]
+
+            # Run the ability and get the output
+            if ability["name"] in self.abilities.list_abilities().keys():
+                output = await self.abilities.run_ability(
+                    task_id, ability["name"], **ability["args"]
+                )
+                LOG.info(f"Run ability output: {(output)}")
+            elif ability["name"] != "inherent knowledge":
+                ability_json = {
+                    "ability": {
+                        "name": "inherent knowledge",
+                        "args": {
+                            "result": "replace this with the result obtained from using your own inherent capabilities to solve the task",
+                        }
+                    }
+                }
+                ability_json = json.dumps(ability_json, indent=4)
+
+                output = f"""The ability you used does not exist in the database. 
+                But since you are a powerful LLM, you are equipped with that ability. 
+                Now, please execute that ability to get the result. The ability keyword in your answer must now becomes:\n{ability_json}"""
+                
+                messages.append({"role": "user", "content": output})
+                continue
+            else:
+                output = ability["args"]["result"]
+
+            if output == None or ability["name"] == "finish":
+                # Set the step output to the "speak" part of the answer
+                step.output = answer["thoughts"]["speak"]
+                break
+            else:
+                new_message = f'Here is the result after completing the previous step of the plan and {ability["name"]} ability\n' + str(output) + "\nNow, execute the next step of the plan"
+
+                # Append the new_messages to the messages list
+                messages.append({"role": "user", "content": new_message})
+
+            # Set the step output to the "speak" part of the answer
+            step.output = answer["thoughts"]["speak"]
+
+
+        
+        for file_path in os.listdir(os.getcwd()):
+            # skip directories
+            if os.path.isdir(os.path.join(self.wd, file_path)):
+                continue
+            if self.files.get(file_path, "") != "" or self.files.get(file_path, 0) != os.path.getmtime(os.path.join(self.wd, file_path)):
+                LOG.info(f"🗒️ Create artifact {file_path}")
+
+                await self.db.create_artifact(
+                    task_id=task_id,
+                    step_id=step.step_id,
+                    file_name=file_path,
+                    relative_path="",
+                    agent_created=True,
+                )
+                self.files[file_path] = os.path.getmtime(os.path.join(self.wd, file_path))
+
+        LOG.info(f"\t✅ Final Step completed: {step.step_id} output: {step.output}")
         return step

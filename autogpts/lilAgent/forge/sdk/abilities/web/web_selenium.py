@@ -82,7 +82,7 @@ def validate_url(func: Callable[..., Any]) -> Any:
     a url as an argument"""
 
     @functools.wraps(func)
-    def wrapper(url: str, *args, **kwargs) -> Any:
+    def wrapper(*args, url: str,  **kwargs) -> Any:
         """Check if the URL is valid using a basic check, urllib check, and local file check
 
         Args:
@@ -94,6 +94,7 @@ def validate_url(func: Callable[..., Any]) -> Any:
         Raises:
             ValueError if the url fails any of the validation tests
         """
+
         # Most basic check if the URL is valid:
         if not re.match(r"^https?://", url):
             raise ValueError("Invalid URL format")
@@ -106,7 +107,7 @@ def validate_url(func: Callable[..., Any]) -> Any:
         if len(url) > 2000:
             raise ValueError("URL is too long")
 
-        return func(sanitize_url(url), *args, **kwargs)
+        return func(*args, sanitize_url(url), **kwargs)
 
     return wrapper
 
@@ -353,6 +354,7 @@ def open_page_in_browser(url: str) -> WebDriver:
             else ChromeDriverService(ChromeDriverManager().install()),
             options=options,
         )
+
     driver.get(url)
 
     WebDriverWait(driver, 10).until(
